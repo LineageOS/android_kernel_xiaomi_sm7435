@@ -74,11 +74,15 @@ static int __init proc_boot_config_init(void)
 	int len;
 #if defined(CONFIG_BOOTCONFIG_HWC_IS_PRODUCT_SKU)
 	const char *HWC_KEY = "androidboot.hwc = ";
+	const char *HARDWARE_SKU_KEY = "androidboot.hardware.sku = ";
 	const char *SKU_KEY = "androidboot.product.hardware.sku = ";
 	char hwc_value[64] = { 0 };
+	char hardware_sku_value[64] = { 0 };
+	char combined_value[128] = { 0 };
 	char *hwc_line, *hwc_quote_start, *hwc_quote_end;
+	char *hardware_sku_line, *hardware_sku_quote_start, *hardware_sku_quote_end;
 	char *sku_line, *sku_quote_start, *sku_quote_end;
-	size_t hwc_len, sku_old_len, sku_new_len;
+	size_t hwc_len, hardware_sku_len, sku_old_len, sku_new_len;
 #endif
 
 	len = copy_xbc_key_value_list(NULL, 0);
@@ -97,6 +101,26 @@ static int __init proc_boot_config_init(void)
 		}
 
 #if defined(CONFIG_BOOTCONFIG_HWC_IS_PRODUCT_SKU)
+		hardware_sku_line = strstr(saved_boot_config, HARDWARE_SKU_KEY);
+		if (!hardware_sku_line)
+			goto skip;
+
+		hardware_sku_quote_start = strchr(hardware_sku_line, '"');
+		if (!hardware_sku_quote_start)
+			goto skip;
+		hardware_sku_quote_start++;
+		hardware_sku_quote_end = strchr(hardware_sku_quote_start, '"');
+		if (!hardware_sku_quote_end || hardware_sku_quote_end <= hardware_sku_quote_start)
+			goto skip;
+
+		hardware_sku_len = hardware_sku_quote_end - hardware_sku_quote_start;
+		if (hardware_sku_len >= sizeof(hardware_sku_value))
+			hardware_sku_len = sizeof(hardware_sku_value) - 1;
+		strncpy(hardware_sku_value, hardware_sku_quote_start, hardware_sku_len);
+		hardware_sku_value[hardware_sku_len] = '\0';
+		if (!hardware_sku_value[0])
+			goto skip;
+
 		hwc_line = strstr(saved_boot_config, HWC_KEY);
 		if (!hwc_line)
 			goto skip;
@@ -117,6 +141,9 @@ static int __init proc_boot_config_init(void)
 		if (!hwc_value[0])
 			goto skip;
 
+		snprintf(combined_value, sizeof(combined_value), "%s_%s", 
+			hardware_sku_value, hwc_value);
+
 		sku_line = strstr(saved_boot_config, SKU_KEY);
 		if (!sku_line)
 			goto skip;
@@ -130,13 +157,23 @@ static int __init proc_boot_config_init(void)
 			goto skip;
 
 		sku_old_len = sku_quote_end - sku_quote_start;
-		sku_new_len = strlen(hwc_value);
-		if (sku_new_len <= sku_old_len) {
-			memmove(sku_quote_start + sku_new_len, sku_quote_end,
-				strlen(sku_quote_end) + 1);
-			memcpy(sku_quote_start, hwc_value, sku_new_len);
+		sku_new_len = strlen(combined_value);
+		if (sku_new_len != sku_old_len) {
+			size_t total_len = strlen(saved_boot_config);
+			size_t offset = sku_quote_start - saved_boot_config;
+			char *new_config;
+			
+			new_config = kzalloc(total_len - sku_old_len + sku_new_len + 1, GFP_KERNEL);
+			if (new_config) {
+				memcpy(new_config, saved_boot_config, offset);
+				memcpy(new_config + offset, combined_value, sku_new_len);
+				memcpy(new_config + offset + sku_new_len, sku_quote_end,
+					total_len - (sku_quote_end - saved_boot_config) + 1);
+				kfree(saved_boot_config);
+				saved_boot_config = new_config;
+			}
 		} else {
-			memcpy(sku_quote_start, hwc_value, sku_old_len);
+			memcpy(sku_quote_start, combined_value, sku_new_len);
 		}
 #endif
 	skip:;
